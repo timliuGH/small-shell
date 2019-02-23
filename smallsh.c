@@ -13,7 +13,9 @@ enum bool {false, true};
 int main()
 {
     /* Shell prompt is ': ' */
-    printf(": ");
+    //printf(": ");
+    //fflush(stdout);
+    write(STDOUT_FILENO, ": ", 2);
     fflush(stdout);
 
     /* Get user input (command with optional arguments) */
@@ -21,23 +23,27 @@ int main()
     size_t bufferSize = 0;
     getline(&buffer, &bufferSize, stdin);
 
-    /* Save length of user input */
+    /* Save length of user input to help with input retrieval later */
     int bufferLen = strlen(buffer);
 
     /* Re-prompt user if input is just newline */
     while (strcmp(buffer, "\n") == 0)
     {
+        /* Reset buffer for getline */
         free(buffer);
         buffer = NULL;
-        printf(": ");
+        
+        /* Prompt user with shell prompt */
+        //printf(": ");
+        //fflush(stdout);
+        write(STDOUT_FILENO, ": ", 2);
         fflush(stdout);
         getline(&buffer, &bufferSize, stdin);
         bufferLen = strlen(buffer);
     }
     //printf("buffer: |%s|\n", buffer);
 
-    /* Copy user input into a new char * */
-    //printf("bufferLen: %d\n", bufferLen);
+    /* Copy user input into a new char * to be modified */
     char *command = malloc((bufferLen+1) * sizeof(char));
     memset(command, '\0', (bufferLen+1)); 
     strncpy(command, buffer, (bufferLen));
@@ -58,6 +64,8 @@ int main()
     /* Intentionally store known garbage values for forked children */
     pid_t spawn = -5;
     int childExitStatus = -5;
+
+    /* Hold exit status of user commands */
     int exitStatus = 0;
 
     /* Get user input until command (first word) is exit */
@@ -89,6 +97,36 @@ int main()
             idx++;
             arg[idx] = strtok_r(NULL, " ", &saveptr);
         }
+        /* Check if argument is asking for expansion of process ID */
+        idx = 0;
+        while (arg[idx] != NULL)
+        {
+            if (strstr(arg[idx], "$$"))
+            {
+                /* Get process ID */
+                int pid = getpid();
+                //printf("pid: %d\n", pid);
+
+                /* Get length of process ID if converted to str */
+                int pidLen = snprintf(NULL, 0, "%d", pid);
+
+                /* Convert pid to str */
+                char pidStr[pidLen + 1];
+                memset(pidStr, '\0', pidLen + 1);
+                snprintf(pidStr, pidLen + 1, "%d", pid);
+                //printf("pidStr: %s\n", pidStr);
+
+                /* Strip off $$ from argument */
+                arg[idx][strcspn(arg[idx], "$")] = 0;
+                //printf("newStr before cat: %s\n", newStr);
+
+                /* Append pid to argument */
+                strcat(arg[idx], pidStr);
+                //printf("pidStr after cat: %s\n", newStr);
+                //printf("new arg[%d]: |%s|\n", idx, arg[idx]);
+            }
+            idx++;
+        }
 #if 0
         for (idx = 0; idx < 512; ++idx)
             if (arg[idx] != NULL)
@@ -107,17 +145,27 @@ int main()
         else if ( strcmp(arg[0], "cd") != 0 && 
                   strcmp(arg[0], "status") != 0 )
         {
+            /* Set status to ok initially */
             exitStatus = 0;
-            /* Check for redirection in user input */
+
+            /* Will hold location of < or > symbols in array of args */
             int newIn = -5;
             int newOut = -5;
+
+            /* File descriptors for new input/output locations */
             int fdIn, fdOut;
+
+            /* Iterate over array of user arguments */
             idx = 0;
             while (arg[idx] != NULL && (newIn == -5 || newOut == -5))
             {
+                /* Check if user wants stdin redirected */
                 if (strcmp(arg[idx], "<") == 0)
                 {
+                    /* Update location of < symbol */
                     newIn = idx;
+
+                    /* Open argument after < symbol */
                     fdIn = open(arg[idx + 1], O_RDONLY);
                     if (fdIn == -1)
                     {
@@ -125,9 +173,13 @@ int main()
                         exitStatus = 1;
                     }
                 }
+                /* Check if user wants stdout redirected */
                 else if (strcmp(arg[idx], ">") == 0)
                 {
+                    /* Update location of > symbol */
                     newOut = idx;
+
+                    /* Open argument after > symbol */
                     fdOut = open(arg[idx + 1], 
                                 O_WRONLY | O_CREAT | O_TRUNC, 0644);
                     if (fdOut == -1)
@@ -138,11 +190,13 @@ int main()
                 }
                 idx++;
             }
-
-            if (exitStatus != 1)
+            /* Check if failed to open any redirection files */
+            if (exitStatus == 0)
             {
+                /* Create child process */
                 spawn = fork();
 
+                /* Hold status of dup2 function */
                 int dupStatus;
                 switch (spawn)
                 {
@@ -152,19 +206,25 @@ int main()
                         break;
                     case 0:
                         //printf("fork succeeded\n");
+                        /* Handle signals */
 
-                        /* Check for no IO redirection */
+                        /* Check for no IO redirection, i.e. user input
+                         * has no < or > symbols */
                         if (newIn == -5 && newOut == -5)
                         {
+                            /* Start new process */
                             execvp(arg[0], arg);
+
+                            /* Free memory if process fails */
                             perror("execvp failed");
                             free(buffer);
                             free(command);
                             raise(SIGTERM);
                         }
-                        /* Handle IO redirection */
+                        /* Check if user wants to redirect stdin */
                         if (newIn != -5)
                         {
+                            /* Redirect stdin */
                             dupStatus = dup2(fdIn, 0);
                             if (dupStatus == -1)
                             {
@@ -172,8 +232,10 @@ int main()
                                 exit(1);
                             }
                         }
+                        /* Check if user wants to redirect stdou */
                         if (newOut != -5)
                         {
+                            /* Redirect stdout */
                             dupStatus = dup2(fdOut, 1);
                             if (dupStatus == -1)
                             {
@@ -181,6 +243,7 @@ int main()
                                 exit(1);
                             }
                         }
+                        /* Execute process after redirection(s) */
                         execlp(arg[0], arg[0], NULL);
 
                         printf("no redirection\n");
@@ -189,6 +252,7 @@ int main()
                         //printf("This is parent prior waiting\n");
                         //int spawnRes; 
                         //kill(spawn, SIGTERM);
+                        /* Have parent wait for child process to finish */
                         waitpid(spawn, &childExitStatus, 0);
                         //printf("This is parent after waiting\n");
                         break;
@@ -198,6 +262,7 @@ int main()
         /* Handle cd command */
         else if (strcmp(arg[0], "cd") == 0)
         {
+            /* Hold status of cd command */
             exitStatus = 0;
             int chdirStatus;
 
@@ -228,25 +293,28 @@ int main()
             }
             else
             {
+                /* Check if child process terminated normally */
                 if (WIFEXITED(childExitStatus) != 0)
                 {
                     printf("Process exited normally\n");
                     fflush(stdout);
+                    /* Retrieve and output exit status */
                     exitStatus = WEXITSTATUS(childExitStatus);
                     printf("exit value %d\n", exitStatus);
                     fflush(stdout);
                 }
+                /* Check if child process was killed by signal */
                 else if (WIFSIGNALED(childExitStatus) != 0)
                 {
                     printf("Process terminated by signal\n");
                     fflush(stdout);
+                    /* Retrieve and output exit status */
                     exitStatus = WTERMSIG(childExitStatus);
                     printf("exit value %d\n", exitStatus);
                     fflush(stdout);
                 }
             }
         }
-
         /* Free memory used to get user's command */
         free(command);
 
@@ -262,14 +330,17 @@ int main()
         /* Re-prompt user if input is just newline */
         while (strcmp(buffer, "\n") == 0)
         {
+            /* Reset buffer for getline */
             free(buffer);
             buffer = NULL;
+
+            /* Prompt user with shell prompt */
             printf(": ");
             fflush(stdout);
             getline(&buffer, &bufferSize, stdin);
             bufferLen = strlen(buffer);
         }
-        /* Copy user input */
+        /* Copy user input into new char * to be modified */
         bufferLen = strlen(buffer);
         command = malloc((bufferLen+1) * sizeof(char));
         memset(command, '\0', (bufferLen+1)); 
