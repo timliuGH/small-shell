@@ -13,6 +13,7 @@ enum bool {false, true};
 int bgStatus(int, pid_t);
 int isForegroundOnly = false;
 void catchSIGTSTP(int signo);
+int checkDone(int arr[], int size, int originalExit);
 
 int main()
 {
@@ -66,9 +67,16 @@ int main()
             /* Prompt user with shell prompt */
             //printf(": ");
             //fflush(stdout);
-            write(STDOUT_FILENO, ": ", 2);
-            fflush(stdout);
-            getline(&buffer, &bufferSize, stdin);
+            while (1)
+            {
+                write(STDOUT_FILENO, ": ", 2);
+                fflush(stdout);
+                numCharsEntered = getline(&buffer, &bufferSize, stdin);
+                if (numCharsEntered == -1)
+                    clearerr(stdin);
+                else
+                    break;
+            }
             bufferLen = strlen(buffer);
         }
         //printf("buffer: |%s|\n", buffer);
@@ -177,7 +185,7 @@ int main()
                   strcmp(arg[0], "status") != 0 &&
                   buffer[bufferLen - 2] == '&' )
         {
-            printf("background command\n");
+            //printf("background command\n");
             /* Set status to ok initially */
             exitStatus = 0;
 
@@ -298,9 +306,11 @@ int main()
                         break;
                     default:
                         printf("background pid is %d\n", spawn);
+                        exitStatus = checkDone(children, cIdx, exitStatus);
                         //printf("This is parent prior waiting\n");
                         //int spawnRes; 
                         //kill(spawn, SIGTERM);
+                        /*
                         int x;
                         int spawnID;
                         for (x = 0; x < cIdx; ++x)
@@ -317,6 +327,7 @@ int main()
                                 }
                             }
                         }
+                        */
                         //printf("This is parent after waiting\n");
                         break;
                 }
@@ -499,7 +510,7 @@ int main()
                 /* Check if child process terminated normally */
                 if (WIFEXITED(childExitStatus) != 0)
                 {
-                    printf("Process exited normally\n");
+                    //printf("Process exited normally\n");
                     fflush(stdout);
                     /* Retrieve and output exit status */
                     exitStatus = WEXITSTATUS(childExitStatus);
@@ -509,7 +520,7 @@ int main()
                 /* Check if child process was killed by signal */
                 else if (WIFSIGNALED(childExitStatus) != 0)
                 {
-                    printf("Process terminated by signal\n");
+                    //printf("Process terminated by signal\n");
                     fflush(stdout);
                     /* Retrieve and output exit status */
                     exitStatus = WTERMSIG(childExitStatus);
@@ -526,20 +537,7 @@ int main()
         buffer = NULL;
 
         /* Check for finished child processes */
-        int x;
-        int spawnID;
-        for (x = 0; x < cIdx; ++x)
-        {
-            if (children[x] != -5)
-            {
-                spawnID = waitpid(children[x], &childExitStatus, WNOHANG);
-                if (spawnID != 0)
-                {
-                    exitStatus = bgStatus(childExitStatus, spawnID);
-                    children[x] = -5;
-                }
-            }
-        }
+        exitStatus = checkDone(children, cIdx, exitStatus);
         while (1)
         {
             /* Prompt user for input */
@@ -560,9 +558,16 @@ int main()
             buffer = NULL;
 
             /* Prompt user with shell prompt */
-            printf(": ");
-            fflush(stdout);
-            getline(&buffer, &bufferSize, stdin);
+            while (1)
+            {
+                printf(": ");
+                fflush(stdout);
+                numCharsEntered = getline(&buffer, &bufferSize, stdin);
+                if (numCharsEntered == -1)
+                    clearerr(stdin);
+                else
+                    break;
+            }
             bufferLen = strlen(buffer);
         }
         /* Copy user input into new char * to be modified */
@@ -625,4 +630,28 @@ void catchSIGTSTP(int signo)
         fflush(stdout);
         isForegroundOnly = false;
     }
+}
+
+int checkDone(int arr[], int size, int originalExit)
+{
+    int spawnID;
+    int exitStatus;
+    int s;
+    for (s = 0; s < size; ++s)
+    {
+        /* Only check processes not finished */
+        if (arr[s] != -5)
+        {
+            spawnID = waitpid(arr[s], &exitStatus, WNOHANG);
+            if (spawnID != 0)
+            {
+                /* Update array to indicate process completed */
+                arr[s] = -5;
+
+                /* Return exit status of process */
+                return bgStatus(exitStatus, spawnID);
+            }
+        }
+    }
+    return originalExit;
 }
