@@ -17,97 +17,85 @@ int checkDone(int arr[], int size, int originalExit);
 
 int main()
 {
+    /* Set up signal handlers for parent process */
     struct sigaction ignore_action;
     struct sigaction SIGTSTP_action;
 
+    /* Initialize ignore_action */
     ignore_action.sa_handler = SIG_IGN;
     sigfillset(&ignore_action.sa_mask);
     ignore_action.sa_flags = 0;
 
+    /* Initialize SIGTSTP_action */
     SIGTSTP_action.sa_handler = catchSIGTSTP;
     sigfillset(&SIGTSTP_action.sa_mask);
     SIGTSTP_action.sa_flags = 0;
 
+    /* Have parent ignore SIGINT and catch SIGTSTP */
     sigaction(SIGINT, &ignore_action, NULL);
     sigaction(SIGTSTP, &SIGTSTP_action, NULL);
 
-    int children[512] = {-5};
-    int cIdx = 0;
-    char *buffer = NULL;
-    size_t bufferSize = 0;
-    int bufferLen;
-    int numCharsEntered;
+    int children[512] = {-5};   /* Holds pids of child processes */
+    int cIdx = 0;               /* Index of children array */
+    char *buffer = NULL;        /* Set up for getline */
+    size_t bufferSize = 0;      /* Set up for getline */
+    int bufferLen;              /* Save length of user input */
+    int numCharsEntered;        /* Holds return value of getline */
 
+    /* Prompt user for input and check for signals interrupting getline */
     while (1)
     {
         /* Shell prompt is ': ' */
-        //printf(": ");
-        //fflush(stdout);
         write(STDOUT_FILENO, ": ", 2);
         fflush(stdout);
 
         /* Get user input (command with optional arguments) */
         numCharsEntered = getline(&buffer, &bufferSize, stdin);
+
+        /* Check if getline was interrupted by signals */
         if (numCharsEntered == -1)
-            clearerr(stdin);
+            clearerr(stdin);        /* Clear getline error */
         else
-            break;
+            break;                  /* User input received */
     }
+    /* Save length of user input to help with input retrieval later */
+    bufferLen = strlen(buffer);
 
-        /* Save length of user input to help with input retrieval later */
-        bufferLen = strlen(buffer);
+    /* Re-prompt user if input is just newline */
+    while (strcmp(buffer, "\n") == 0)
+    {
+        /* Reset buffer for getline */
+        free(buffer);
+        buffer = NULL;
 
-        /* Re-prompt user if input is just newline */
-        while (strcmp(buffer, "\n") == 0)
+        while (1)
         {
-            /* Reset buffer for getline */
-            free(buffer);
-            buffer = NULL;
+            /* Prompt user for input with shell prompt */
+            write(STDOUT_FILENO, ": ", 2);
+            fflush(stdout);
+            numCharsEntered = getline(&buffer, &bufferSize, stdin);
 
-            /* Prompt user with shell prompt */
-            //printf(": ");
-            //fflush(stdout);
-            while (1)
-            {
-                write(STDOUT_FILENO, ": ", 2);
-                fflush(stdout);
-                numCharsEntered = getline(&buffer, &bufferSize, stdin);
-                if (numCharsEntered == -1)
-                    clearerr(stdin);
-                else
-                    break;
-            }
-            bufferLen = strlen(buffer);
+            /* Check if getline was interrupted by signals */
+            if (numCharsEntered == -1)
+                clearerr(stdin);    /* Clear getline error */
+            else
+                break;              /* User input received */
         }
-        //printf("buffer: |%s|\n", buffer);
-        //printf("buffer[bufferLen-2]: |%c|\n", buffer[bufferLen-2]);
-
+        bufferLen = strlen(buffer);
+    }
     /* Copy user input into a new char * to be modified */
     char *command = malloc((bufferLen+1) * sizeof(char));
     memset(command, '\0', (bufferLen+1)); 
     strncpy(command, buffer, (bufferLen));
-    //printf("command: |%s|\n", command);
 
     /* Extract first word from user input (up to first space or newline) */
     command[strcspn(command, " \n")] = 0;
 
-    //printf("buffer: |%s|\n", buffer);
-    //printf("command: |%s|\n", command);
-#if 0
-    if (strcmp(command, "echo") == 0)
-        printf("good\n");
-    else
-        printf("not good\n");
-#endif
+    pid_t spawn = -5;           /* Holds pid of child process */
+    int childExitStatus = -5;   /* For waitpid; tell how process exited */
+    int exitStatus = 0;         /* Actual exit status of user commands */
 
-    /* Intentionally store known garbage values for forked children */
-    pid_t spawn = -5;
-    int childExitStatus = -5;
-
-    /* Hold exit status of user commands */
-    int exitStatus = 0;
-
-    /* Get user input until command (first word) is exit */
+    /* Get user input until command (first word in input) is exit */
     while (strcmp(command, "exit") != 0)
     {
         /* This array of strings holds user command plus argument(s) */
@@ -118,10 +106,9 @@ int main()
         int c;
         for (c = 0; c <= bufferLen; ++c)
             arrVers[c] = buffer[c];
-        //printf("arrVers: |%s|\n", arrVers);
+
         /* Strip off newline at end of string for strtok_r */
         arrVers[strcspn(arrVers, "\n")] = 0;
-        //printf("arrVers: |%s|\n", arrVers);
 
         /* Set up for strtok_r; used internally by strtok_r */
         char *saveptr;
@@ -136,47 +123,30 @@ int main()
             idx++;
             arg[idx] = strtok_r(NULL, " ", &saveptr);
         }
-        /* Check if argument is asking for expansion of process ID */
+        /* Check if argument is asking for variable expansion of pid */
         idx = 0;
         while (arg[idx] != NULL)
         {
             if (strstr(arg[idx], "$$"))
             {
-                /* Get process ID */
                 int pid = getpid();
-                //printf("pid: %d\n", pid);
 
-                /* Get length of process ID if converted to str */
+                /* Get length of pid if converted to str */
                 int pidLen = snprintf(NULL, 0, "%d", pid);
 
                 /* Convert pid to str */
                 char pidStr[pidLen + 1];
                 memset(pidStr, '\0', pidLen + 1);
                 snprintf(pidStr, pidLen + 1, "%d", pid);
-                //printf("pidStr: %s\n", pidStr);
 
                 /* Strip off $$ from argument */
                 arg[idx][strcspn(arg[idx], "$")] = 0;
-                //printf("newStr before cat: %s\n", newStr);
 
                 /* Append pid to argument */
                 strcat(arg[idx], pidStr);
-                //printf("pidStr after cat: %s\n", newStr);
-                //printf("new arg[%d]: |%s|\n", idx, arg[idx]);
             }
             idx++;
         }
-#if 0
-        for (idx = 0; idx < 512; ++idx)
-            if (arg[idx] != NULL)
-                printf("arg[%d]: |%s|\n", idx, arg[idx]);
-
-        if (strcmp(arg[0], "echo") == 0)
-            printf("good\n");
-        else
-            printf("not good\n");
-#endif
-
         /* Do nothing if input is comment line starting with # */
         if (arg[0][0] == '#') 
         {}
@@ -185,7 +155,6 @@ int main()
                   strcmp(arg[0], "status") != 0 &&
                   buffer[bufferLen - 2] == '&' )
         {
-            //printf("background command\n");
             /* Set status to ok initially */
             exitStatus = 0;
 
@@ -210,7 +179,8 @@ int main()
                     fdIn = open(arg[idx + 1], O_RDONLY);
                     if (fdIn == -1)
                     {
-                        perror("input file open failed");
+                        printf("cannot open %s for input\n", arg[idx + 1]);
+                        fflush(stdout);
                         exitStatus = 1;
                     }
                 }
@@ -231,16 +201,17 @@ int main()
                 }
                 idx++;
             }
-            /* Check if failed to open any redirection files */
+            /* Make sure no errors in opening redirection files */
             if (exitStatus == 0)
             {
                 /* Create child process */
                 spawn = fork();
+
+                /* Save child pid */
                 children[cIdx] = spawn;
                 cIdx++;
 
-                /* Hold status of dup2 function */
-                int dupStatus;
+                int dupStatus;  /* Hold status of dup2 function */
                 switch (spawn)
                 {
                     case -1:
@@ -248,9 +219,7 @@ int main()
                         exit(1);
                         break;
                     case 0:
-                        /* Handle signals */
-
-                        /* Set stdin for background process */
+                        /* Set stdin to /dev/null if no file provided */
                         if (newIn == -5)
                         {
                             fdIn = open("/dev/null", O_RDONLY);
@@ -260,6 +229,7 @@ int main()
                                 exit(1);
                             }
                         }
+                        /* Set stdin */
                         dupStatus = dup2(fdIn, 0);
                         if (dupStatus == -1)
                         {
@@ -267,7 +237,7 @@ int main()
                             exit(1);
                         }
 
-                        /* Set stdout for background process */
+                        /* Set stdout to /dev/null if no file provided */
                         if (newOut == -5)
                         {
                             fdOut = open("/dev/null", O_WRONLY);
@@ -277,58 +247,31 @@ int main()
                                 exit(1);
                             }
                         }
+                        /* Set stdout */
                         dupStatus = dup2(fdOut, 1);
                         if (dupStatus == -1)
                         {
                             perror("dup2 bg stdout failed");
                             exit(1);
                         }
-#if 0
-                        printf("here\n");
-                        int x;
-                        for(x = 0; x < 512; ++x)
-                            if (arg[x] != NULL)
-                                printf("ARG[%d]: |%s|\n", x, arg[x]);
-#endif
-                        /* Remove & from array of arguments */
+                        /* Remove & from array of input arguments */
                         arg[idx - 1] = NULL;
 
                         /* Start child process */
                         execvp(arg[0], arg);
 
                         /* Free memory if process fails */
-                        perror("execvp failed");
+                        printf("%s: no such file or directory\n", arg[0]);
                         free(buffer);
                         free(command);
+
+                        /* Terminate process */
                         raise(SIGTERM);
-                        /* Execute process after redirection(s) */
-                        execlp(arg[0], arg[0], NULL);
                         break;
                     default:
+                        /* Output background pid and check if done */
                         printf("background pid is %d\n", spawn);
                         exitStatus = checkDone(children, cIdx, exitStatus);
-                        //printf("This is parent prior waiting\n");
-                        //int spawnRes; 
-                        //kill(spawn, SIGTERM);
-                        /*
-                        int x;
-                        int spawnID;
-                        for (x = 0; x < cIdx; ++x)
-                        {
-                            if (children[x] != -5)
-                            {
-                                spawnID = waitpid(children[x], 
-                                          &childExitStatus, WNOHANG);
-                                if (spawnID != 0)
-                                {
-                                    exitStatus = bgStatus(childExitStatus,
-                                                          spawnID);
-                                    children[x] = -5;
-                                }
-                            }
-                        }
-                        */
-                        //printf("This is parent after waiting\n");
                         break;
                 }
             }
@@ -340,9 +283,10 @@ int main()
             /* Set status to ok initially */
             exitStatus = 0;
 
+            /* Handle inputs with & in foreground-only state */
             if (isForegroundOnly)
             {
-                    /* Remove & from array of arguments */
+                /* Remove & from array of arguments */
                 if (buffer[bufferLen - 2] == '&')
                     arg[idx - 1] = NULL;
             }
@@ -368,7 +312,8 @@ int main()
                     fdIn = open(arg[idx + 1], O_RDONLY);
                     if (fdIn == -1)
                     {
-                        perror("input file open failed");
+                        printf("cannot open %s for input\n", arg[idx + 1]);
+                        fflush(stdout);
                         exitStatus = 1;
                     }
                 }
@@ -389,15 +334,14 @@ int main()
                 }
                 idx++;
             }
-            /* Check if failed to open any redirection files */
+            /* Make sure no errors in opening redirection files */
             if (exitStatus == 0)
             {
                 /* Create child process */
                 spawn = fork();
 
-                /* Hold status of dup2 function */
-                int dupStatus;
-                struct sigaction SIGINT_action;
+                int dupStatus;          /* Hold status of dup2 function */
+                struct sigaction SIGINT_action; /* SIGINT signal handler */
                 switch (spawn)
                 {
                     case -1:
@@ -405,15 +349,13 @@ int main()
                         exit(1);
                         break;
                     case 0:
-                        //printf("fork succeeded\n");
-                        /* Handle signals */
+                        /* Set up SIGINT signal handler */
                         SIGINT_action.sa_handler = SIG_DFL;
                         sigfillset(&SIGINT_action.sa_mask);
                         SIGINT_action.sa_flags = 0;
-                        //SIGINT_action.sa_sigaction = 0;
 
+                        /* Do default SIGINT action */
                         sigaction(SIGINT, &SIGINT_action, NULL);
-
 
                         /* Check for no IO redirection, i.e. user input
                          * has no < or > symbols */
@@ -423,7 +365,8 @@ int main()
                             execvp(arg[0], arg);
 
                             /* Free memory if process fails */
-                            perror("execvp failed");
+                            printf("%s: no such file or directory\n", 
+                                    arg[0]);
                             free(buffer);
                             free(command);
                             raise(SIGTERM);
@@ -452,23 +395,18 @@ int main()
                         }
                         /* Execute process after redirection(s) */
                         execlp(arg[0], arg[0], NULL);
-
-                        printf("no redirection\n");
                         break;
                     default:
-                        //printf("This is parent prior waiting\n");
-                        //int spawnRes; 
-                        //kill(spawn, SIGTERM);
                         /* Have parent wait for child process to finish */
                         waitpid(spawn, &childExitStatus, 0);
+
+                        /* Check if child process terminated by signal */
                         if (WIFSIGNALED(childExitStatus) != 0)
                         {
                             exitStatus = WTERMSIG(childExitStatus);
                             printf("terminated by signal %d\n", exitStatus);
                             fflush(stdout);
                         }
-
-                        //printf("This is parent after waiting\n");
                         break;
                 }
             }
@@ -480,10 +418,8 @@ int main()
             exitStatus = 0;
             int chdirStatus;
 
-            /* Check if there are additional arguments */
+            /* Change directory to HOME if just cd command and 0 args */
             if (arg[1] == NULL)
-
-                /* Change directory to HOME if just cd command */
                 chdirStatus = chdir(getenv("HOME"));
             else
                 /* Change directory to argument following cd command */
@@ -491,10 +427,7 @@ int main()
 
             /* Make sure chdir was successful */
             if (chdirStatus != 0)
-            {
-                printf("chdir failed\n");
-                exit(1);
-            }
+                perror("chdir failed");
         }
         /* Handle status command */
         else if (strcmp(arg[0], "status") == 0)
@@ -510,8 +443,6 @@ int main()
                 /* Check if child process terminated normally */
                 if (WIFEXITED(childExitStatus) != 0)
                 {
-                    //printf("Process exited normally\n");
-                    fflush(stdout);
                     /* Retrieve and output exit status */
                     exitStatus = WEXITSTATUS(childExitStatus);
                     printf("exit value %d\n", exitStatus);
@@ -520,11 +451,9 @@ int main()
                 /* Check if child process was killed by signal */
                 else if (WIFSIGNALED(childExitStatus) != 0)
                 {
-                    //printf("Process terminated by signal\n");
-                    fflush(stdout);
                     /* Retrieve and output exit status */
                     exitStatus = WTERMSIG(childExitStatus);
-                    printf("exit value %d\n", exitStatus);
+                    printf("terminated by signal %d\n", exitStatus);
                     fflush(stdout);
                 }
             }
@@ -532,11 +461,11 @@ int main()
         /* Free memory used to get user's command */
         free(command);
 
-        /* Reset buffer */
+        /* Reset buffer for next getline */
         free(buffer);
         buffer = NULL;
 
-        /* Check for finished child processes */
+        /* Check for finished child processes before re-prompting */
         exitStatus = checkDone(children, cIdx, exitStatus);
         while (1)
         {
@@ -544,11 +473,14 @@ int main()
             printf(": ");
             fflush(stdout);
             numCharsEntered = getline(&buffer, &bufferSize, stdin);
+
+            /* Check for getline errors due to signal interruption */
             if (numCharsEntered == -1)
                 clearerr(stdin);
             else
                 break;
         }
+        bufferLen = strlen(buffer);
 
         /* Re-prompt user if input is just newline */
         while (strcmp(buffer, "\n") == 0)
@@ -557,12 +489,16 @@ int main()
             free(buffer);
             buffer = NULL;
 
-            /* Prompt user with shell prompt */
+            /* Check for finished child processes before re-prompting */
+            exitStatus = checkDone(children, cIdx, exitStatus);
             while (1)
             {
+                /* Prompt user for input */
                 printf(": ");
                 fflush(stdout);
                 numCharsEntered = getline(&buffer, &bufferSize, stdin);
+
+                /* Check for getline errors due to signal interruption */
                 if (numCharsEntered == -1)
                     clearerr(stdin);
                 else
@@ -571,7 +507,6 @@ int main()
             bufferLen = strlen(buffer);
         }
         /* Copy user input into new char * to be modified */
-        bufferLen = strlen(buffer);
         command = malloc((bufferLen+1) * sizeof(char));
         memset(command, '\0', (bufferLen+1)); 
         strncpy(command, buffer, (bufferLen));
@@ -590,25 +525,23 @@ int main()
 
 int bgStatus(int exitIn, pid_t s)
 {
-    int res;
+    int res; /* Hold actual exit status */
+    
+    /* Check if process terminated normally */
     if (WIFEXITED(exitIn) != 0)
     {
-        printf("bg Process exited normally\n");
-        fflush(stdout);
         /* Retrieve and output exit status */
         res = WEXITSTATUS(exitIn);
-        printf("background pid %d is done: exit "
-                "value %d\n", s, res);
+        printf("background pid %d is done: exit value %d\n", s, res);
         fflush(stdout);
     }
-    /* Check if process was killed by signal */
+    /* Check if process was terminated by signal */
     else if (WIFSIGNALED(exitIn) != 0)
     {
-        printf("bg Process term by signal\n");
-        fflush(stdout);
         /* Retrieve and output exit status */
         res = WTERMSIG(exitIn);
-        printf("exit value %d\n", res);
+        printf("background pid %d is done: terminated by signal %d\n", 
+               s, res);
         fflush(stdout);
     }
     return res;
@@ -616,6 +549,7 @@ int bgStatus(int exitIn, pid_t s)
 
 void catchSIGTSTP(int signo)
 {
+    /* Check if current state of shell is foreground-only */
     if (!isForegroundOnly)
     {
         char *msg = "\nEntering foreground-only mode (& is now ignored)\n";
@@ -636,6 +570,8 @@ int checkDone(int arr[], int size, int originalExit)
 {
     int spawnID;
     int exitStatus;
+
+    /* Iterate over array of child pids */
     int s;
     for (s = 0; s < size; ++s)
     {
