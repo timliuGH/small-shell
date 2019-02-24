@@ -11,43 +11,68 @@
 enum bool {false, true};
 
 int bgStatus(int, pid_t);
+int isForegroundOnly = false;
+void catchSIGTSTP(int signo);
 
 int main()
 {
+    struct sigaction ignore_action;
+    struct sigaction SIGTSTP_action;
+
+    ignore_action.sa_handler = SIG_IGN;
+    sigfillset(&ignore_action.sa_mask);
+    ignore_action.sa_flags = 0;
+
+    SIGTSTP_action.sa_handler = catchSIGTSTP;
+    sigfillset(&SIGTSTP_action.sa_mask);
+    SIGTSTP_action.sa_flags = 0;
+
+    sigaction(SIGINT, &ignore_action, NULL);
+    sigaction(SIGTSTP, &SIGTSTP_action, NULL);
+
     int children[512] = {-5};
     int cIdx = 0;
-
-    /* Shell prompt is ': ' */
-    //printf(": ");
-    //fflush(stdout);
-    write(STDOUT_FILENO, ": ", 2);
-    fflush(stdout);
-
-    /* Get user input (command with optional arguments) */
     char *buffer = NULL;
     size_t bufferSize = 0;
-    getline(&buffer, &bufferSize, stdin);
+    int bufferLen;
+    int numCharsEntered;
 
-    /* Save length of user input to help with input retrieval later */
-    int bufferLen = strlen(buffer);
-
-    /* Re-prompt user if input is just newline */
-    while (strcmp(buffer, "\n") == 0)
+    while (1)
     {
-        /* Reset buffer for getline */
-        free(buffer);
-        buffer = NULL;
-        
-        /* Prompt user with shell prompt */
+        /* Shell prompt is ': ' */
         //printf(": ");
         //fflush(stdout);
         write(STDOUT_FILENO, ": ", 2);
         fflush(stdout);
-        getline(&buffer, &bufferSize, stdin);
-        bufferLen = strlen(buffer);
+
+        /* Get user input (command with optional arguments) */
+        numCharsEntered = getline(&buffer, &bufferSize, stdin);
+        if (numCharsEntered == -1)
+            clearerr(stdin);
+        else
+            break;
     }
-    //printf("buffer: |%s|\n", buffer);
-    //printf("buffer[bufferLen-2]: |%c|\n", buffer[bufferLen-2]);
+
+        /* Save length of user input to help with input retrieval later */
+        bufferLen = strlen(buffer);
+
+        /* Re-prompt user if input is just newline */
+        while (strcmp(buffer, "\n") == 0)
+        {
+            /* Reset buffer for getline */
+            free(buffer);
+            buffer = NULL;
+
+            /* Prompt user with shell prompt */
+            //printf(": ");
+            //fflush(stdout);
+            write(STDOUT_FILENO, ": ", 2);
+            fflush(stdout);
+            getline(&buffer, &bufferSize, stdin);
+            bufferLen = strlen(buffer);
+        }
+        //printf("buffer: |%s|\n", buffer);
+        //printf("buffer[bufferLen-2]: |%c|\n", buffer[bufferLen-2]);
 
     /* Copy user input into a new char * to be modified */
     char *command = malloc((bufferLen+1) * sizeof(char));
@@ -148,7 +173,7 @@ int main()
         if (arg[0][0] == '#') 
         {}
         /* Check if user wants to run background command (not built-in) */
-        else if ( strcmp(arg[0], "cd") != 0 &&
+        else if ( !isForegroundOnly && strcmp(arg[0], "cd") != 0 &&
                   strcmp(arg[0], "status") != 0 &&
                   buffer[bufferLen - 2] == '&' )
         {
@@ -304,6 +329,13 @@ int main()
             /* Set status to ok initially */
             exitStatus = 0;
 
+            if (isForegroundOnly)
+            {
+                    /* Remove & from array of arguments */
+                if (buffer[bufferLen - 2] == '&')
+                    arg[idx - 1] = NULL;
+            }
+
             /* Will hold location of < or > symbols in array of args */
             int newIn = -5;
             int newOut = -5;
@@ -355,13 +387,6 @@ int main()
                 /* Hold status of dup2 function */
                 int dupStatus;
                 struct sigaction SIGINT_action;
-                /* Handle signals */
-                SIGINT_action.sa_handler = SIG_DFL;
-                sigfillset(&SIGINT_action.sa_mask);
-                SIGINT_action.sa_flags = 0;
-                SIGINT_action.sa_sigaction = 0;
-
-                sigaction(SIGINT, &SIGINT_action, NULL);
                 switch (spawn)
                 {
                     case -1:
@@ -370,6 +395,13 @@ int main()
                         break;
                     case 0:
                         //printf("fork succeeded\n");
+                        /* Handle signals */
+                        SIGINT_action.sa_handler = SIG_DFL;
+                        sigfillset(&SIGINT_action.sa_mask);
+                        SIGINT_action.sa_flags = 0;
+                        //SIGINT_action.sa_sigaction = 0;
+
+                        sigaction(SIGINT, &SIGINT_action, NULL);
 
 
                         /* Check for no IO redirection, i.e. user input
@@ -418,6 +450,13 @@ int main()
                         //kill(spawn, SIGTERM);
                         /* Have parent wait for child process to finish */
                         waitpid(spawn, &childExitStatus, 0);
+                        if (WIFSIGNALED(childExitStatus) != 0)
+                        {
+                            exitStatus = WTERMSIG(childExitStatus);
+                            printf("terminated by signal %d\n", exitStatus);
+                            fflush(stdout);
+                        }
+
                         //printf("This is parent after waiting\n");
                         break;
                 }
@@ -486,6 +525,7 @@ int main()
         free(buffer);
         buffer = NULL;
 
+        /* Check for finished child processes */
         int x;
         int spawnID;
         for (x = 0; x < cIdx; ++x)
@@ -500,10 +540,17 @@ int main()
                 }
             }
         }
-        /* Prompt user for input */
-        printf(": ");
-        fflush(stdout);
-        getline(&buffer, &bufferSize, stdin);
+        while (1)
+        {
+            /* Prompt user for input */
+            printf(": ");
+            fflush(stdout);
+            numCharsEntered = getline(&buffer, &bufferSize, stdin);
+            if (numCharsEntered == -1)
+                clearerr(stdin);
+            else
+                break;
+        }
 
         /* Re-prompt user if input is just newline */
         while (strcmp(buffer, "\n") == 0)
@@ -560,4 +607,22 @@ int bgStatus(int exitIn, pid_t s)
         fflush(stdout);
     }
     return res;
+}
+
+void catchSIGTSTP(int signo)
+{
+    if (!isForegroundOnly)
+    {
+        char *msg = "\nEntering foreground-only mode (& is now ignored)\n";
+        write(STDOUT_FILENO, msg, 50);
+        fflush(stdout);
+        isForegroundOnly = true;
+    }
+    else
+    {
+        char *msg = "\nExiting foreground-only mode\n";
+        write(STDOUT_FILENO, msg, 30);
+        fflush(stdout);
+        isForegroundOnly = false;
+    }
 }
