@@ -10,8 +10,13 @@
 
 enum bool {false, true};
 
+int bgStatus(int, pid_t);
+
 int main()
 {
+    int children[512] = {-5};
+    int cIdx = 0;
+
     /* Shell prompt is ': ' */
     //printf(": ");
     //fflush(stdout);
@@ -42,6 +47,7 @@ int main()
         bufferLen = strlen(buffer);
     }
     //printf("buffer: |%s|\n", buffer);
+    //printf("buffer[bufferLen-2]: |%c|\n", buffer[bufferLen-2]);
 
     /* Copy user input into a new char * to be modified */
     char *command = malloc((bufferLen+1) * sizeof(char));
@@ -141,7 +147,157 @@ int main()
         /* Do nothing if input is comment line starting with # */
         if (arg[0][0] == '#') 
         {}
-        /* Handle commands that are not cd or status */
+        /* Check if user wants to run background command (not built-in) */
+        else if ( strcmp(arg[0], "cd") != 0 &&
+                  strcmp(arg[0], "status") != 0 &&
+                  buffer[bufferLen - 2] == '&' )
+        {
+            printf("background command\n");
+            /* Set status to ok initially */
+            exitStatus = 0;
+
+            /* Will hold location of < or > symbols in array of args */
+            int newIn = -5;
+            int newOut = -5;
+
+            /* File descriptors for new input/output locations */
+            int fdIn, fdOut;
+
+            /* Iterate over array of user arguments */
+            idx = 0;
+            while (arg[idx] != NULL && (newIn == -5 || newOut == -5))
+            {
+                /* Check if user wants stdin redirected */
+                if (strcmp(arg[idx], "<") == 0)
+                {
+                    /* Update location of < symbol */
+                    newIn = idx;
+
+                    /* Open argument after < symbol */
+                    fdIn = open(arg[idx + 1], O_RDONLY);
+                    if (fdIn == -1)
+                    {
+                        perror("input file open failed");
+                        exitStatus = 1;
+                    }
+                }
+                /* Check if user wants stdout redirected */
+                else if (strcmp(arg[idx], ">") == 0)
+                {
+                    /* Update location of > symbol */
+                    newOut = idx;
+
+                    /* Open argument after > symbol */
+                    fdOut = open(arg[idx + 1], 
+                            O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    if (fdOut == -1)
+                    {
+                        perror("output file open failed");
+                        exitStatus = 1;
+                    }
+                }
+                idx++;
+            }
+            /* Check if failed to open any redirection files */
+            if (exitStatus == 0)
+            {
+                /* Create child process */
+                spawn = fork();
+                children[cIdx] = spawn;
+                cIdx++;
+
+                /* Hold status of dup2 function */
+                int dupStatus;
+                switch (spawn)
+                {
+                    case -1:
+                        perror("fork failed\n");
+                        exit(1);
+                        break;
+                    case 0:
+                        /* Handle signals */
+
+                        /* Set stdin for background process */
+                        if (newIn == -5)
+                        {
+                            fdIn = open("/dev/null", O_RDONLY);
+                            if (fdIn == -1)
+                            {
+                                perror("/dev/null input failed");
+                                exit(1);
+                            }
+                        }
+                        dupStatus = dup2(fdIn, 0);
+                        if (dupStatus == -1)
+                        {
+                            perror("dup2 bg stdin failed");
+                            exit(1);
+                        }
+
+                        /* Set stdout for background process */
+                        if (newOut == -5)
+                        {
+                            fdOut = open("/dev/null", O_WRONLY);
+                            if (fdOut == -1)
+                            {
+                                perror("/dev/null output failed");
+                                exit(1);
+                            }
+                        }
+                        dupStatus = dup2(fdOut, 1);
+                        if (dupStatus == -1)
+                        {
+                            perror("dup2 bg stdout failed");
+                            exit(1);
+                        }
+#if 0
+                        printf("here\n");
+                        int x;
+                        for(x = 0; x < 512; ++x)
+                            if (arg[x] != NULL)
+                                printf("ARG[%d]: |%s|\n", x, arg[x]);
+#endif
+                        /* Remove & from array of arguments */
+                        arg[idx - 1] = NULL;
+
+                        /* Start child process */
+                        execvp(arg[0], arg);
+
+                        /* Free memory if process fails */
+                        perror("execvp failed");
+                        free(buffer);
+                        free(command);
+                        raise(SIGTERM);
+                        /* Execute process after redirection(s) */
+                        execlp(arg[0], arg[0], NULL);
+                        break;
+                    default:
+                        printf("background pid is %d\n", spawn);
+                        //printf("This is parent prior waiting\n");
+                        //int spawnRes; 
+                        //kill(spawn, SIGTERM);
+                        int x;
+                        int spawnID;
+                        for (x = 0; x < cIdx; ++x)
+                        {
+                            if (children[x] != -5)
+                            {
+                                spawnID = waitpid(children[x], 
+                                          &childExitStatus, WNOHANG);
+                                if (spawnID != 0)
+                                {
+                                    exitStatus = bgStatus(childExitStatus,
+                                                          spawnID);
+                                    children[x] = -5;
+                                }
+                            }
+                        }
+                        //printf("This is parent after waiting\n");
+                        break;
+                }
+            }
+        }
+        /* Handle foreground commands that are not cd or status */
         else if ( strcmp(arg[0], "cd") != 0 && 
                   strcmp(arg[0], "status") != 0 )
         {
@@ -198,6 +354,14 @@ int main()
 
                 /* Hold status of dup2 function */
                 int dupStatus;
+                struct sigaction SIGINT_action;
+                /* Handle signals */
+                SIGINT_action.sa_handler = SIG_DFL;
+                sigfillset(&SIGINT_action.sa_mask);
+                SIGINT_action.sa_flags = 0;
+                SIGINT_action.sa_sigaction = 0;
+
+                sigaction(SIGINT, &SIGINT_action, NULL);
                 switch (spawn)
                 {
                     case -1:
@@ -206,7 +370,7 @@ int main()
                         break;
                     case 0:
                         //printf("fork succeeded\n");
-                        /* Handle signals */
+
 
                         /* Check for no IO redirection, i.e. user input
                          * has no < or > symbols */
@@ -232,7 +396,7 @@ int main()
                                 exit(1);
                             }
                         }
-                        /* Check if user wants to redirect stdou */
+                        /* Check if user wants to redirect stdout */
                         if (newOut != -5)
                         {
                             /* Redirect stdout */
@@ -321,7 +485,21 @@ int main()
         /* Reset buffer */
         free(buffer);
         buffer = NULL;
-        
+
+        int x;
+        int spawnID;
+        for (x = 0; x < cIdx; ++x)
+        {
+            if (children[x] != -5)
+            {
+                spawnID = waitpid(children[x], &childExitStatus, WNOHANG);
+                if (spawnID != 0)
+                {
+                    exitStatus = bgStatus(childExitStatus, spawnID);
+                    children[x] = -5;
+                }
+            }
+        }
         /* Prompt user for input */
         printf(": ");
         fflush(stdout);
@@ -356,4 +534,30 @@ int main()
     free(command);
 
     return 0;
+}
+
+int bgStatus(int exitIn, pid_t s)
+{
+    int res;
+    if (WIFEXITED(exitIn) != 0)
+    {
+        printf("bg Process exited normally\n");
+        fflush(stdout);
+        /* Retrieve and output exit status */
+        res = WEXITSTATUS(exitIn);
+        printf("background pid %d is done: exit "
+                "value %d\n", s, res);
+        fflush(stdout);
+    }
+    /* Check if process was killed by signal */
+    else if (WIFSIGNALED(exitIn) != 0)
+    {
+        printf("bg Process term by signal\n");
+        fflush(stdout);
+        /* Retrieve and output exit status */
+        res = WTERMSIG(exitIn);
+        printf("exit value %d\n", res);
+        fflush(stdout);
+    }
+    return res;
 }
