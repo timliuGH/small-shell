@@ -1,3 +1,10 @@
+/* Program:     smallsh
+ * Author:      Timothy Liu
+ * Date:        February 25, 2019
+ * Description: This program runs a shell called smallsh that has 3 built-
+ * in commands: cd, status, and exit. Other commands will use fork and exec
+ * and run via bash. 
+ */ 
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -10,7 +17,7 @@
 
 enum bool {false, true};
 
-int isForegroundOnly = false;
+int isForegroundOnly = false; /* Used by catchSIGTSTP function */
 void catchSIGTSTP(int signo);
 int checkDone(int arr[], int size, int originalExit);
 int bgStatus(int, pid_t);
@@ -35,7 +42,12 @@ int main()
     sigaction(SIGINT, &ignore_action, NULL);
     sigaction(SIGTSTP, &SIGTSTP_action, NULL);
 
-    int children[512] = {-5};   /* Holds pids of child processes */
+    int children[512];   /* Holds pids of child processes */
+
+    /* Initialize all pids to -5 to indicate terminated process */
+    int m;
+    for (m = 0; m < 512; ++m)
+        children[m] = -5;
     int cIdx = 0;               /* Index of children array */
     char *buffer = NULL;        /* Set up for getline */
     size_t bufferSize = 0;      /* Set up for getline */
@@ -152,8 +164,7 @@ int main()
         {}
         /* Check if user wants to run background command (not built-in) */
         else if ( !isForegroundOnly && strcmp(arg[0], "cd") != 0 &&
-                  strcmp(arg[0], "status") != 0 &&
-                  buffer[bufferLen - 2] == '&' )
+                  strcmp(arg[0], "status") != 0 && buffer[bufferLen-2] == '&' )
         {
             /* Set status to ok initially */
             exitStatus = 0;
@@ -236,7 +247,6 @@ int main()
                             perror("dup2 bg stdin failed");
                             exit(1);
                         }
-
                         /* Set stdout to /dev/null if no file provided */
                         if (newOut == -5)
                         {
@@ -262,6 +272,7 @@ int main()
 
                         /* Free memory if process fails */
                         printf("%s: no such file or directory\n", arg[0]);
+                        fflush(stdout);
                         free(buffer);
                         free(command);
 
@@ -271,6 +282,7 @@ int main()
                     default:
                         /* Output background pid and check if done */
                         printf("background pid is %d\n", spawn);
+                        fflush(stdout);
                         exitStatus = checkDone(children, cIdx, exitStatus);
                         break;
                 }
@@ -290,7 +302,6 @@ int main()
                 if (buffer[bufferLen - 2] == '&')
                     arg[idx - 1] = NULL;
             }
-
             /* Will hold location of < or > symbols in array of args */
             int newIn = -5;
             int newOut = -5;
@@ -365,8 +376,8 @@ int main()
                             execvp(arg[0], arg);
 
                             /* Free memory if process fails */
-                            printf("%s: no such file or directory\n", 
-                                    arg[0]);
+                            printf("%s: no such file or directory\n", arg[0]);
+                            fflush(stdout);
                             free(buffer);
                             free(command);
                             raise(SIGTERM);
@@ -415,7 +426,6 @@ int main()
         else if (strcmp(arg[0], "cd") == 0)
         {
             /* Hold status of cd command */
-            exitStatus = 0;
             int chdirStatus;
 
             /* Change directory to HOME if just cd command and 0 args */
@@ -514,8 +524,19 @@ int main()
         /* Extract command (first word) from user input */
         command[strcspn(command, " \n")] = 0;
     }
-    /* TODO: Handle exit command by first killing other processes */
+    /* Iterate over child process IDs one last time before exiting shell */
+    for (m = 0; m < cIdx; ++m)
+    {
+        /* Terminate unfinished processes */
+        if (children[m] != -5)
+        {
+            kill(children[m], SIGTERM);
 
+            /* Prevent exitiing with zombie processes */
+            waitpid(children[m], &childExitStatus, 0);
+            children[m] = -5;
+        }
+    }
     /* Free memory used for user input */
     free(buffer);
     free(command);
@@ -595,8 +616,7 @@ int bgStatus(int exitIn, pid_t s)
     {
         /* Retrieve and output exit status */
         res = WTERMSIG(exitIn);
-        printf("background pid %d is done: terminated by signal %d\n", 
-               s, res);
+        printf("background pid %d is done: terminated by signal %d\n", s, res);
         fflush(stdout);
     }
     return res;
