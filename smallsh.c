@@ -10,10 +10,10 @@
 
 enum bool {false, true};
 
-int bgStatus(int, pid_t);
 int isForegroundOnly = false;
 void catchSIGTSTP(int signo);
 int checkDone(int arr[], int size, int originalExit);
+int bgStatus(int, pid_t);
 
 int main()
 {
@@ -523,30 +523,10 @@ int main()
     return 0;
 }
 
-int bgStatus(int exitIn, pid_t s)
-{
-    int res; /* Hold actual exit status */
-    
-    /* Check if process terminated normally */
-    if (WIFEXITED(exitIn) != 0)
-    {
-        /* Retrieve and output exit status */
-        res = WEXITSTATUS(exitIn);
-        printf("background pid %d is done: exit value %d\n", s, res);
-        fflush(stdout);
-    }
-    /* Check if process was terminated by signal */
-    else if (WIFSIGNALED(exitIn) != 0)
-    {
-        /* Retrieve and output exit status */
-        res = WTERMSIG(exitIn);
-        printf("background pid %d is done: terminated by signal %d\n", 
-               s, res);
-        fflush(stdout);
-    }
-    return res;
-}
-
+/* This function is used by the SIGTSTP signal handler. It checks the
+ * current state to determine if it is in foreground-only mode and switches
+ * it to the opposite state.
+ */
 void catchSIGTSTP(int signo)
 {
     /* Check if current state of shell is foreground-only */
@@ -566,6 +546,9 @@ void catchSIGTSTP(int signo)
     }
 }
 
+/* This function checks an array of process IDs to see if any have 
+ * terminated. If so, it returns the exit status of that process. If not,
+ * it returns the passed-in exit status of the previous command. */
 int checkDone(int arr[], int size, int originalExit)
 {
     int spawnID;
@@ -590,4 +573,31 @@ int checkDone(int arr[], int size, int originalExit)
         }
     }
     return originalExit;
+}
+
+/* This function checks if the passed-in exit status of a process was
+ * terminated normally or by a signal and returns the actual exit status.
+ */
+int bgStatus(int exitIn, pid_t s)
+{
+    int res; /* Hold actual exit status */
+    
+    /* Check if process terminated normally */
+    if (WIFEXITED(exitIn) != 0)
+    {
+        /* Retrieve and output exit status */
+        res = WEXITSTATUS(exitIn);
+        printf("background pid %d is done: exit value %d\n", s, res);
+        fflush(stdout);
+    }
+    /* Check if process was terminated by signal */
+    else if (WIFSIGNALED(exitIn) != 0)
+    {
+        /* Retrieve and output exit status */
+        res = WTERMSIG(exitIn);
+        printf("background pid %d is done: terminated by signal %d\n", 
+               s, res);
+        fflush(stdout);
+    }
+    return res;
 }
